@@ -116,8 +116,13 @@ Run 2, the submitted run. One human message; everything after it is the band.
 - **Commits:** 3, all authored by `coder`, none amended or rebased.
 - **Supplied stage-1 checks:** 120 passed.
 - **Verifier's own probes:** ~300 assertions; 3 defects found.
-- **Model spend:** one Claude session limit, exhausted. This is the binding constraint on
-  the factory, not wall clock.
+- **Model spend:** $19.37 for the room, as reported by BAND Desktop.
+- **Where it went:** the coder is roughly two thirds of the tool calls, and it is also the
+  seat whose work must be redone when the verifier rejects. The verifier costs about 40%
+  of what the coder costs and found three defects in work that had already passed 120
+  checks, which is the cheapest part of this factory per defect found.
+- **The binding constraint is quota, not money or wall clock.** Two of three runs ended on
+  a session limit rather than on a decision.
 
 ## What we tried that failed
 
