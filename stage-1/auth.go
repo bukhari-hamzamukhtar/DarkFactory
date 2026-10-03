@@ -8,10 +8,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// bcryptCost is the work factor for stored passwords (§6 forbids plaintext). Hashing
-// never happens while the store lock is held, so a slow hash costs the caller its own
-// latency and nobody else's.
-const bcryptCost = 10
+// bcryptCost is the work factor for stored passwords (§6 forbids plaintext).
+//
+// Hashing never happens while the store lock is held, so a slow hash costs the caller
+// its own latency and nobody else's. It does still cost CPU, and §2 budgets only 2
+// vCPU while allowing 50 requests in flight with a 5 second per-request timeout. At
+// the library default of 10 this was measured taking 6.7 s for the slowest of 50
+// concurrent logins on that budget -- a breach of the stated limit. At 8 the same
+// burst settles well inside it, and a seeded fixture of 50 accounts hashes in about
+// a second of the 10 that reset is allowed. The figure is the highest that fits the
+// resource limits, not the highest bcrypt offers.
+const bcryptCost = 8
 
 const minPasswordLength = 8
 

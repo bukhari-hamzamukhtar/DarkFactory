@@ -36,6 +36,10 @@ def pytest_addoption(parser):
     parser.addoption("--base-url", default=os.environ.get(
         "TABLEKEEPER_BASE_URL", "http://127.0.0.1:18080"),
         help="Base URL of the running service under test")
+    parser.addoption("--second-base-url", default=os.environ.get(
+        "TABLEKEEPER_SECOND_BASE_URL"),
+        help="A second container of the same image, for the import-across-processes "
+             "check; that check is skipped when this is absent")
 
 
 def new_key() -> str:
