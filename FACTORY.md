@@ -114,8 +114,9 @@ One room, two stages, two human messages — one dispatch per stage and nothing 
 
 - **Wall clock:** 80 minutes for stage 1; stage 2 reached a complete committed milestone
   31 minutes after dispatch, 16 minutes before the session limit ended the run.
-- **Reached:** `claimed stage: 2` — the API and the browser product, each building and
-  serving from a clean container with outbound network blocked.
+- **Reached:** `claimed stage: 3` — one dispatch per stage, each stage the previous one
+  carried forward and widened, every folder building and serving from a clean container
+  with outbound network blocked.
 - **Commits:** 3, all authored by `coder`, none amended or rebased.
 - **Supplied stage-1 checks:** 120 passed.
 - **Verifier's own probes:** ~300 assertions; 3 defects found.
@@ -168,8 +169,9 @@ the evidence exist before it is convenient.
 
 ## State at submission
 
-Two stage folders, both building and serving from a clean container. The harness reports
-`claimed stage: 2`.
+Three stage folders, each building and serving from a clean container. The harness
+reports `claimed stage: 3` — the API, the browser product, and then dated policies,
+availability explanations, reservation history and recurring series on top of it.
 
 `stage-1/` ships **as the verifier rejected it**. Its fix round was cut off by a session
 limit, and re-dispatching a stage already dispatched would have made the run a rerun, so
