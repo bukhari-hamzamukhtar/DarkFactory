@@ -1,0 +1,172 @@
+{{define "app.html" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Tablekeeper</title>
+<link rel="stylesheet" href="/static/app.css?v={{.Version}}">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8D%B7%3C/text%3E%3C/svg%3E">
+</head>
+<body data-route="{{.Route}}">
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="masthead__inner">
+    <a class="brand" href="/">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" role="img" aria-hidden="true">
+          <path d="M4 3h16v2.5a6 6 0 0 1-5 5.92V18h3v3H6v-3h3v-6.58A6 6 0 0 1 4 5.5V3z"
+                fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="brand__name">Tablekeeper</span>
+    </a>
+
+    <nav class="nav" aria-label="Main">
+      <a class="nav__link{{if eq .Route "search"}} nav__link--current{{end}}" href="/">Find a table</a>
+      <a class="nav__link{{if eq .Route "lookup"}} nav__link--current{{end}}" href="/lookup">My booking</a>
+    </nav>
+
+    <!-- Filled in by the client once a session exists: current-user and
+         logout-button must be absent while signed out. -->
+    <div class="session" data-session-slot>
+      <a class="nav__link{{if eq .Route "login"}} nav__link--current{{end}}" data-signed-out href="/login">Sign in</a>
+      <a class="button button--quiet" data-signed-out href="/signup">Create account</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="page">
+
+{{if eq .Route "search"}}
+<section class="hero">
+  <h1 class="hero__title">A table, kept for you</h1>
+  <p class="hero__lede">Choose an evening and a party size. We will show you every table
+    the kitchen can seat, and the tables we can put together for a larger group.</p>
+</section>
+
+<section class="card search" aria-labelledby="search-heading">
+  <h2 class="card__title" id="search-heading">Find a table</h2>
+  <form class="search__form" data-search-form novalidate>
+    <div class="field">
+      <label class="field__label" for="restaurant">Restaurant</label>
+      <select class="field__input" id="restaurant" data-testid="restaurant-select" name="restaurant">
+        {{range .Restaurants}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+      </select>
+    </div>
+    <div class="field">
+      <label class="field__label" for="date">Date</label>
+      <input class="field__input" id="date" data-testid="date-input" name="date"
+             type="date" value="{{.Today}}" required>
+    </div>
+    <div class="field field--narrow">
+      <label class="field__label" for="party">Guests</label>
+      <input class="field__input" id="party" data-testid="party-size-input" name="party"
+             type="number" min="1" step="1" value="2" inputmode="numeric" required>
+    </div>
+    <div class="field field--action">
+      <button class="button button--primary" data-testid="search-button" type="submit">
+        Show availability
+      </button>
+    </div>
+  </form>
+  <p class="search__note" data-search-context hidden></p>
+</section>
+
+<div class="feedback" data-auth-slot></div>
+
+<section class="results" aria-labelledby="results-heading" aria-live="polite">
+  <h2 class="results__heading" id="results-heading">Availability</h2>
+  <div data-results>
+    <p class="muted results__idle">Pick a date and press <em>Show availability</em>.</p>
+  </div>
+</section>
+
+<div data-booking-slot></div>
+{{end}}
+
+{{if eq .Route "signup"}}
+<section class="card card--narrow" aria-labelledby="signup-heading">
+  <h1 class="card__title" id="signup-heading">Create an account</h1>
+  <p class="muted">So we can keep your bookings together.</p>
+  <div class="feedback" data-auth-slot></div>
+  <form class="stack" data-signup-form novalidate>
+    <div class="field">
+      <label class="field__label" for="signup-name">Your name</label>
+      <input class="field__input" id="signup-name" data-testid="signup-display-name"
+             type="text" autocomplete="name">
+    </div>
+    <div class="field">
+      <label class="field__label" for="signup-email">Email</label>
+      <input class="field__input" id="signup-email" data-testid="signup-email"
+             type="email" autocomplete="email" required>
+    </div>
+    <div class="field">
+      <label class="field__label" for="signup-password">Password</label>
+      <input class="field__input" id="signup-password" data-testid="signup-password"
+             type="password" autocomplete="new-password" required>
+      <p class="field__hint">At least 8 characters.</p>
+    </div>
+    <button class="button button--primary" data-testid="signup-submit" type="submit">
+      Create account
+    </button>
+  </form>
+  <p class="muted card__foot">Already have an account? <a href="/login">Sign in</a>.</p>
+</section>
+{{end}}
+
+{{if eq .Route "login"}}
+<section class="card card--narrow" aria-labelledby="login-heading">
+  <h1 class="card__title" id="login-heading">Sign in</h1>
+  <p class="muted">Welcome back.</p>
+  <div class="feedback" data-auth-slot></div>
+  <form class="stack" data-login-form novalidate>
+    <div class="field">
+      <label class="field__label" for="login-email">Email</label>
+      <input class="field__input" id="login-email" data-testid="login-email"
+             type="email" autocomplete="email" required>
+    </div>
+    <div class="field">
+      <label class="field__label" for="login-password">Password</label>
+      <input class="field__input" id="login-password" data-testid="login-password"
+             type="password" autocomplete="current-password" required>
+    </div>
+    <button class="button button--primary" data-testid="login-submit" type="submit">
+      Sign in
+    </button>
+  </form>
+  <p class="muted card__foot">New here? <a href="/signup">Create an account</a>.</p>
+</section>
+{{end}}
+
+{{if eq .Route "lookup"}}
+<section class="card card--narrow" aria-labelledby="lookup-heading">
+  <h1 class="card__title" id="lookup-heading">Find my booking</h1>
+  <p class="muted">Enter the reference from your confirmation.</p>
+  <form class="lookup__form" data-lookup-form novalidate>
+    <div class="field">
+      <label class="field__label" for="lookup-reference">Reference</label>
+      <input class="field__input field__input--code" id="lookup-reference"
+             data-testid="lookup-reference-input" type="text" autocomplete="off"
+             spellcheck="false" placeholder="K3P7QW" required>
+    </div>
+    <button class="button button--primary" data-testid="lookup-submit" type="submit">
+      Look it up
+    </button>
+  </form>
+</section>
+<div data-reservation-slot></div>
+{{end}}
+
+</main>
+
+<footer class="footer">
+  <p>Tablekeeper · tables held in good faith</p>
+</footer>
+
+<script src="/static/app.js?v={{.Version}}" defer></script>
+</body>
+</html>
+{{- end}}

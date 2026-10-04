@@ -1,0 +1,592 @@
+package main
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
+
+// state is the whole world: the model, the live sessions, the idempotency receipts of
+// §7, and stage 3's published policies and recurring agreements. One type serves three
+// jobs -- in-memory store, export payload and import payload -- so an export can never
+// drift from what the service actually holds, which is what §10 asks for.
+type state struct {
+	Users        []*user           `json:"users"`
+	Tokens       map[string]string `json:"tokens"`
+	Restaurants  []*restaurant     `json:"restaurants"`
+	Reservations []*reservation    `json:"reservations"`
+	Receipts     []*receipt        `json:"receipts"`
+	// Stage 3. Policies are keyed by restaurant id and held in publication order.
+	Policies map[string][]*policy `json:"policies"`
+	Series   []*series            `json:"series"`
+
+	usersByID         map[string]*user
+	usersByEmail      map[string]*user
+	restaurantsByID   map[string]*restaurant
+	reservationsByRef map[string]*reservation
+	receiptsByKey     map[string]*receipt
+	seriesByID        map[string]*series
+}
+
+func newState() *state {
+	empty := &state{Tokens: map[string]string{}}
+	if err := empty.prepare(); err != nil {
+		panic("the empty state must always be valid: " + err.Error())
+	}
+	return empty
+}
+
+// prepare validates a freshly decoded state and builds every index the request paths
+// use. It is the single gate in front of the store: a fixture (§3.3) and an import
+// (§10) both arrive here, so neither can install something the API could not have
+// produced itself. On any failure the caller keeps its previous state untouched.
+//
+// Validation is deliberately narrow. It rejects what is impossible -- a booking on a
+// table that does not exist, two confirmed bookings on one table at one time, a zone
+// that cannot be loaded -- and accepts everything a fixture is merely free to say.
+// Refusing a reset costs every later request in the run, so leniency is the default
+// wherever the requirements state no rule.
+//
+// It is also where an older export is brought up to date: a stage-1 or stage-2
+// reservation arrives with no revision, no accepted terms and no history, and leaves
+// with policy 0's terms, revision 1 and a created entry stamped with its own
+// created_at. Nothing is regenerated and nothing is invented.
+func (s *state) prepare() *apiError {
+	if s.Tokens == nil {
+		s.Tokens = map[string]string{}
+	}
+	if s.Users == nil {
+		s.Users = []*user{}
+	}
+	if s.Restaurants == nil {
+		s.Restaurants = []*restaurant{}
+	}
+	if s.Reservations == nil {
+		s.Reservations = []*reservation{}
+	}
+	if s.Receipts == nil {
+		s.Receipts = []*receipt{}
+	}
+	if s.Policies == nil {
+		s.Policies = map[string][]*policy{}
+	}
+	if s.Series == nil {
+		s.Series = []*series{}
+	}
+	s.usersByID = map[string]*user{}
+	s.usersByEmail = map[string]*user{}
+	s.restaurantsByID = map[string]*restaurant{}
+	s.reservationsByRef = map[string]*reservation{}
+	s.receiptsByKey = map[string]*receipt{}
+	s.seriesByID = map[string]*series{}
+
+	for _, u := range s.Users {
+		if u == nil {
+			return validationFailed("a user entry is null")
+		}
+		if !isValidID(u.ID) {
+			return validationFailed("user id must be 1 to 64 characters")
+		}
+		if _, clash := s.usersByID[u.ID]; clash {
+			return validationFailed("duplicate user id " + u.ID)
+		}
+		if u.Email == "" {
+			return validationFailed("user email is required")
+		}
+		folded := strings.ToLower(u.Email)
+		if _, clash := s.usersByEmail[folded]; clash {
+			return validationFailed("duplicate user email " + u.Email)
+		}
+		s.usersByID[u.ID] = u
+		s.usersByEmail[folded] = u
+	}
+
+	for _, r := range s.Restaurants {
+		if err := s.prepareRestaurant(r); err != nil {
+			return err
+		}
+	}
+	for restaurantID, published := range s.Policies {
+		rest := s.restaurantsByID[restaurantID]
+		if rest == nil {
+			return validationFailed("a policy names an unknown restaurant")
+		}
+		seen := map[int]bool{}
+		for _, p := range published {
+			if p == nil {
+				return validationFailed("a policy entry is null")
+			}
+			if p.PolicyVersion < 1 || seen[p.PolicyVersion] {
+				return validationFailed("policy versions must be distinct and positive")
+			}
+			seen[p.PolicyVersion] = true
+			if err := validatePolicyValues(rest, p); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, res := range s.Reservations {
+		if err := s.prepareReservation(res); err != nil {
+			return err
+		}
+	}
+	if err := s.checkNoOverlap(); err != nil {
+		return err
+	}
+
+	for _, agreement := range s.Series {
+		if err := s.prepareSeries(agreement); err != nil {
+			return err
+		}
+	}
+
+	for token, userID := range s.Tokens {
+		if token == "" {
+			return validationFailed("a session token is empty")
+		}
+		if _, known := s.usersByID[userID]; !known {
+			return validationFailed("a session token names an unknown user")
+		}
+	}
+
+	for _, rec := range s.Receipts {
+		if rec == nil {
+			return validationFailed("an idempotency receipt is null")
+		}
+		if rec.Key == "" || rec.Method == "" || rec.Path == "" {
+			return validationFailed("an idempotency receipt is incomplete")
+		}
+		if _, known := s.usersByID[rec.UserID]; !known {
+			return validationFailed("an idempotency receipt names an unknown user")
+		}
+		if !json.Valid(rec.Response) {
+			return validationFailed("an idempotency receipt holds no JSON response")
+		}
+		s.receiptsByKey[receiptKey(rec.UserID, rec.Method, rec.Path, rec.Key)] = rec
+	}
+	return nil
+}
+
+func (s *state) prepareRestaurant(r *restaurant) *apiError {
+	if r == nil {
+		return validationFailed("a restaurant entry is null")
+	}
+	if !isValidID(r.ID) {
+		return validationFailed("restaurant id must be 1 to 64 characters")
+	}
+	if _, clash := s.restaurantsByID[r.ID]; clash {
+		return validationFailed("duplicate restaurant id " + r.ID)
+	}
+	loc, err := time.LoadLocation(r.Timezone)
+	if err != nil {
+		return validationFailed("unknown IANA timezone " + r.Timezone)
+	}
+	r.loc = loc
+	// A slot grid of zero minutes names no slots at all and would not terminate; a
+	// reservation of no minutes occupies nothing. Both are impossible rather than
+	// merely unusual.
+	if r.SlotMinutes < 1 || r.SlotMinutes > 24*60 {
+		return validationFailed("slot_minutes must be between 1 and 1440")
+	}
+	if r.DurationMinutes < 1 || r.DurationMinutes > maxCountedValue {
+		return validationFailed("reservation_duration_minutes must be at least 1")
+	}
+	if r.CutoffMinutes < 0 || r.CutoffMinutes > maxCountedValue {
+		return validationFailed("cancellation_cutoff_minutes must not be negative")
+	}
+	if err := validateOpeningHours(r.OpeningHours); err != nil {
+		return err
+	}
+
+	r.byTable = map[string]*table{}
+	for i := range r.Tables {
+		t := &r.Tables[i]
+		if !isValidID(t.ID) {
+			return validationFailed("table id must be 1 to 64 characters")
+		}
+		if _, clash := r.byTable[t.ID]; clash {
+			return validationFailed("duplicate table id " + t.ID)
+		}
+		// §5 makes a negative count a validation failure. A capacity of zero is odd
+		// but coherent -- a table nobody can be seated at -- so it is accepted and
+		// simply never offered.
+		if t.Capacity < 0 || t.Capacity > maxCountedValue {
+			return validationFailed("table capacity must not be negative")
+		}
+		r.byTable[t.ID] = t
+	}
+
+	r.pairs = nil
+	for _, pair := range r.Combinable {
+		if len(pair) != 2 {
+			return validationFailed("each combinable entry must be a pair of table ids")
+		}
+		if pair[0] == pair[1] {
+			return validationFailed("a combinable pair must name two different tables")
+		}
+		if _, known := r.byTable[pair[0]]; !known {
+			return validationFailed("a combinable pair names a table this restaurant does not have")
+		}
+		if _, known := r.byTable[pair[1]]; !known {
+			return validationFailed("a combinable pair names a table this restaurant does not have")
+		}
+		r.pairs = append(r.pairs, tablePair{ids: []string{pair[0], pair[1]}})
+	}
+
+	if r.ManagerUserIDs == nil {
+		r.ManagerUserIDs = []string{} // §policies: the default is nobody
+	}
+	for _, id := range r.ManagerUserIDs {
+		if !isValidID(id) {
+			return validationFailed("a manager user id must be 1 to 64 characters")
+		}
+	}
+	if r.Revision < 1 {
+		r.Revision = 1
+	}
+	s.restaurantsByID[r.ID] = r
+	return nil
+}
+
+// validateOpeningHours applies §4's rules to a set of opening hours, wherever they
+// come from: a fixture, a policy, or an imported state.
+func validateOpeningHours(hours []openingHours) *apiError {
+	for _, entry := range hours {
+		if !isWeekdayKey(entry.Weekday) {
+			return validationFailed("weekday must be one of mon tue wed thu fri sat sun")
+		}
+		opens, okOpens := parseHourMinute(entry.Opens)
+		closes, okCloses := parseHourMinute(entry.Closes)
+		if !okOpens || !okCloses {
+			return validationFailed("opens and closes must be local HH:MM")
+		}
+		if closes <= opens {
+			return validationFailed("closes must be later than opens on the same day")
+		}
+	}
+	return nil
+}
+
+func (s *state) prepareReservation(res *reservation) *apiError {
+	if res == nil {
+		return validationFailed("a reservation entry is null")
+	}
+	// A stage-1 state, and a stage-1 style fixture, name one table in `table_id`.
+	// Fold it in here so the rest of the service only knows about sets (§10).
+	if len(res.TableIDs) == 0 && res.LegacyTableID != "" {
+		res.TableIDs = []string{res.LegacyTableID}
+	}
+	res.LegacyTableID = ""
+	if !isValidID(res.ID) {
+		return validationFailed("reservation id must be 1 to 64 characters")
+	}
+	if !isValidReference(res.Reference) {
+		return validationFailed("reservation reference must be 6 to 12 characters of A-Z0-9")
+	}
+	if _, clash := s.reservationsByRef[res.Reference]; clash {
+		return validationFailed("duplicate reservation reference " + res.Reference)
+	}
+	if _, known := s.usersByID[res.UserID]; !known {
+		return validationFailed("reservation " + res.Reference + " names an unknown user")
+	}
+	rest, known := s.restaurantsByID[res.RestaurantID]
+	if !known {
+		return validationFailed("reservation " + res.Reference + " names an unknown restaurant")
+	}
+	if len(res.TableIDs) == 0 {
+		return validationFailed("reservation " + res.Reference + " names no table")
+	}
+	seen := map[string]bool{}
+	for _, id := range res.TableIDs {
+		if _, known := rest.byTable[id]; !known {
+			return validationFailed("reservation " + res.Reference + " names an unknown table")
+		}
+		if seen[id] {
+			return validationFailed("reservation " + res.Reference + " names one table twice")
+		}
+		seen[id] = true
+	}
+	if res.PartySize < 1 || res.PartySize > maxCountedValue {
+		return validationFailed("reservation party_size must be at least 1")
+	}
+	if res.Status == "" {
+		// §4 and stage 2: a seeded reservation is confirmed unless it says otherwise.
+		res.Status = statusConfirmed
+	}
+	if res.Status != statusConfirmed && res.Status != statusCancelled {
+		return validationFailed("reservation status must be confirmed or cancelled")
+	}
+	if _, ok := parseCivilStamp(res.StartsAtLocal); !ok {
+		return validationFailed("reservation starts_at_local must be YYYY-MM-DDTHH:MM")
+	}
+	rendered, start, ok := normalizeTimestamp(res.StartsAt)
+	if !ok {
+		return validationFailed("reservation starts_at must be a valid RFC 3339 timestamp")
+	}
+	res.StartsAt, res.start = rendered, start
+	if res.CreatedAt == "" {
+		res.CreatedAt = formatUTC(time.Now())
+	}
+	createdAt, _, ok := normalizeTimestamp(res.CreatedAt)
+	if !ok {
+		return validationFailed("reservation created_at must be a valid RFC 3339 timestamp")
+	}
+	res.CreatedAt = createdAt
+
+	// Stage 3, including what an older export does not carry.
+	if res.AcceptedTerms.SlotMinutes == 0 && res.AcceptedTerms.DurationMinutes == 0 {
+		// Seeded bookings, and bookings from a stage-1 or stage-2 export, start at
+		// revision 1 under policy 0.
+		res.AcceptedTerms = rest.policyZero()
+	}
+	if res.AcceptedTerms.SlotMinutes < 1 || res.AcceptedTerms.DurationMinutes < 1 {
+		return validationFailed("reservation accepted_terms are not a usable policy")
+	}
+	if res.AcceptedTerms.Capacities == nil {
+		res.AcceptedTerms.Capacities = rest.policyZero().Capacities
+	}
+	if err := validateOpeningHours(res.AcceptedTerms.OpeningHours); err != nil {
+		return err
+	}
+	if res.Revision < 1 {
+		res.Revision = 1
+	}
+	for i := range res.History {
+		if res.History[i].Seq != i+1 {
+			return validationFailed("reservation history must be numbered from 1")
+		}
+		if _, _, ok := normalizeTimestamp(res.History[i].At); !ok {
+			return validationFailed("a history entry carries no valid timestamp")
+		}
+	}
+	if len(res.History) == 0 {
+		res.History = []historyEntry{createdEntry(res, res.CreatedAt)}
+	}
+	s.reservationsByRef[res.Reference] = res
+	return nil
+}
+
+func (s *state) prepareSeries(agreement *series) *apiError {
+	if agreement == nil {
+		return validationFailed("a series entry is null")
+	}
+	if !isValidID(agreement.ID) {
+		return validationFailed("series id must be 1 to 64 characters")
+	}
+	if _, clash := s.seriesByID[agreement.ID]; clash {
+		return validationFailed("duplicate series id " + agreement.ID)
+	}
+	if _, known := s.usersByID[agreement.UserID]; !known {
+		return validationFailed("a series names an unknown user")
+	}
+	if _, known := s.restaurantsByID[agreement.RestaurantID]; !known {
+		return validationFailed("a series names an unknown restaurant")
+	}
+	if agreement.IntervalWeeks < minIntervalWeeks || agreement.IntervalWeeks > maxIntervalWeeks {
+		return validationFailed("series interval_weeks is out of range")
+	}
+	if len(agreement.Occurrences) < minSeriesCount || len(agreement.Occurrences) > maxSeriesCount {
+		return validationFailed("a series holds between 2 and 12 occurrences")
+	}
+	if agreement.Revision < 1 {
+		agreement.Revision = 1
+	}
+	for _, occurrence := range agreement.Occurrences {
+		res := s.reservationsByRef[occurrence.Reference]
+		if res == nil {
+			return validationFailed("a series names an unknown reservation")
+		}
+		if res.SeriesID != agreement.ID {
+			return validationFailed("a series and its occurrence disagree")
+		}
+	}
+	s.seriesByID[agreement.ID] = agreement
+	return nil
+}
+
+// checkNoOverlap enforces §1's invariant on any state that is about to go live. A
+// fixture or an import that double-books a table is rejected rather than installed,
+// because no sequence of API calls could have produced it. A combination counts on
+// every table it holds, and each booking is measured over its own accepted duration.
+func (s *state) checkNoOverlap() *apiError {
+	type place struct{ restaurantID, tableID string }
+	held := map[place][]*reservation{}
+	for _, res := range s.Reservations {
+		if !res.occupies() {
+			continue
+		}
+		for _, tableID := range res.TableIDs {
+			where := place{res.RestaurantID, tableID}
+			for _, other := range held[where] {
+				if other.overlaps(res.start, res.AcceptedTerms.duration()) {
+					return validationFailed("reservations " + other.Reference + " and " +
+						res.Reference + " occupy table " + tableID + " at overlapping times")
+				}
+			}
+			held[where] = append(held[where], res)
+		}
+	}
+	return nil
+}
+
+// ---- policies ------------------------------------------------------------
+
+// policiesOf is a restaurant's published policies, in publication order.
+func (s *state) policiesOf(restaurantID string) []*policy {
+	return s.Policies[restaurantID]
+}
+
+// nextPolicyVersion is the version the next successful publication will take. Versions
+// start at 1 and increase by one per restaurant; a failed write or a replay allocates
+// nothing, which falls out of only ever calling this on the way to a commit.
+func (s *state) nextPolicyVersion(restaurantID string) int {
+	highest := 0
+	for _, p := range s.Policies[restaurantID] {
+		if p.PolicyVersion > highest {
+			highest = p.PolicyVersion
+		}
+	}
+	return highest + 1
+}
+
+func (s *state) addPolicy(restaurantID string, p *policy) {
+	if s.Policies == nil {
+		s.Policies = map[string][]*policy{}
+	}
+	s.Policies[restaurantID] = append(s.Policies[restaurantID], p)
+}
+
+// termsFor selects the policy that governs a booking whose local start date is `date`,
+// and returns it as accepted terms.
+//
+// The greatest `effective_from` not later than that date wins; a tie goes to the
+// greatest policy_version, so a second policy published for the same date supersedes
+// the first. Publication order is otherwise irrelevant -- a policy published later for
+// an earlier date does not win on recency. When nothing qualifies, policy 0 applies:
+// the fixture's own rules.
+func (s *state) termsFor(rest *restaurant, date civilDate) terms {
+	chosen := (*policy)(nil)
+	wanted := date.String()
+	for _, candidate := range s.Policies[rest.ID] {
+		if candidate.EffectiveFrom > wanted {
+			continue
+		}
+		if chosen == nil ||
+			candidate.EffectiveFrom > chosen.EffectiveFrom ||
+			(candidate.EffectiveFrom == chosen.EffectiveFrom &&
+				candidate.PolicyVersion > chosen.PolicyVersion) {
+			chosen = candidate
+		}
+	}
+	if chosen == nil {
+		return rest.policyZero()
+	}
+	return chosen.terms()
+}
+
+// ---- queries -------------------------------------------------------------
+
+func (s *state) userByToken(token string) *user {
+	userID, ok := s.Tokens[token]
+	if !ok {
+		return nil
+	}
+	return s.usersByID[userID]
+}
+
+func (s *state) userByEmail(email string) *user {
+	return s.usersByEmail[strings.ToLower(email)]
+}
+
+func (s *state) reservationByReference(reference string) *reservation {
+	return s.reservationsByRef[reference]
+}
+
+// ownedReservation applies §8's "404 if it is not the caller's": another diner's
+// booking is indistinguishable from one that does not exist.
+func (s *state) ownedReservation(owner *user, reference string) (*reservation, *apiError) {
+	res := s.reservationByReference(reference)
+	if res == nil || res.UserID != owner.ID {
+		return nil, notFound()
+	}
+	return res, nil
+}
+
+func (s *state) receiptFor(userID, method, path, key string) *receipt {
+	return s.receiptsByKey[receiptKey(userID, method, path, key)]
+}
+
+func (s *state) putReceipt(rec *receipt) {
+	s.Receipts = append(s.Receipts, rec)
+	s.receiptsByKey[receiptKey(rec.UserID, rec.Method, rec.Path, rec.Key)] = rec
+}
+
+func (s *state) addUser(u *user) {
+	s.Users = append(s.Users, u)
+	s.usersByID[u.ID] = u
+	s.usersByEmail[strings.ToLower(u.Email)] = u
+}
+
+func (s *state) issueToken(u *user) string {
+	token := randomHex(24)
+	s.Tokens[token] = u.ID
+	return token
+}
+
+func (s *state) addReservation(res *reservation) {
+	s.Reservations = append(s.Reservations, res)
+	s.reservationsByRef[res.Reference] = res
+}
+
+func (s *state) addSeries(agreement *series) {
+	s.Series = append(s.Series, agreement)
+	s.seriesByID[agreement.ID] = agreement
+}
+
+func (s *state) seriesOf(res *reservation) *series {
+	if res.SeriesID == "" {
+		return nil
+	}
+	return s.seriesByID[res.SeriesID]
+}
+
+func (s *state) freshReference() string {
+	for {
+		candidate := newReference()
+		if _, clash := s.reservationsByRef[candidate]; !clash {
+			return candidate
+		}
+	}
+}
+
+// tableOccupied reports whether a confirmed booking holds the table at any point in
+// [start, start+duration). Bookings in `except` are the ones the caller is itself
+// about to move, so their current occupancy does not stand in their own way.
+func (s *state) tableOccupied(rest *restaurant, tableID string, start time.Time,
+	duration time.Duration, except map[string]bool) bool {
+	for _, res := range s.Reservations {
+		if res.RestaurantID != rest.ID || except[res.ID] || !res.holds(tableID) {
+			continue
+		}
+		if !res.occupies() {
+			continue
+		}
+		if res.overlaps(start, duration) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyTableOccupied is the same question for a whole seating: a combination can be
+// booked only when every table in it is free.
+func (s *state) anyTableOccupied(rest *restaurant, tableIDs []string, start time.Time,
+	duration time.Duration, except map[string]bool) bool {
+	for _, tableID := range tableIDs {
+		if s.tableOccupied(rest, tableID, start, duration, except) {
+			return true
+		}
+	}
+	return false
+}
