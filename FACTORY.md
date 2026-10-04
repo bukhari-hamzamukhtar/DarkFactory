@@ -105,14 +105,17 @@ passed. That is the entire case for building a factory rather than an agent.
 
 ## Measured cost
 
-Run 2, the submitted run. One human message; everything after it is the band.
+One room, two stages, two human messages — one dispatch per stage and nothing else.
 
 | | coordinator | coder | verifier |
 |---|---:|---:|---:|
-| Tool calls | 12 | 94 | 38 |
-| Room messages | 6 | 3 | 2 |
+| Tool calls | 19 | 171 | 40 |
+| Room messages | 11 | 4 | 3 |
 
-- **Wall clock:** 80 minutes, dispatch to the rejection being relayed.
+- **Wall clock:** 80 minutes for stage 1; stage 2 reached a complete committed milestone
+  31 minutes after dispatch, 16 minutes before the session limit ended the run.
+- **Reached:** `claimed stage: 2` — the API and the browser product, each building and
+  serving from a clean container with outbound network blocked.
 - **Commits:** 3, all authored by `coder`, none amended or rebased.
 - **Supplied stage-1 checks:** 120 passed.
 - **Verifier's own probes:** ~300 assertions; 3 defects found.
@@ -150,6 +153,13 @@ the submitted run that exchange completed within the first minutes. An interrupt
 costs stages instead of the entry. A factory should be legible while it works, not only
 once it is done.
 
+**Ordering the work changed the outcome more than any model setting did.** Stage 1 was
+interrupted with nothing committed, because the coder worked for two hours and intended to
+commit at the end. For stage 2 the task said: get a thin but real end-to-end version of
+every required surface committed first, then deepen it. The complete milestone landed
+sixteen minutes before the limit hit. Same factory, same models, same interruption —
+one run lost everything and the other lost only the refinement.
+
 **Session limits are the real budget.** Two of three runs ended on a model usage limit
 rather than on a decision. A factory of strong models working autonomously for hours is
 constrained by quota long before it is constrained by the clock, and nothing inside the
@@ -158,13 +168,26 @@ the evidence exist before it is convenient.
 
 ## State at submission
 
-The verifier's rejection was relayed to the coder, which began the fix and was stopped by
-the session limit. The submitted `stage-1/` is therefore the rejected revision: it builds
-and serves from a clean container, passes all 120 supplied checks, and carries the three
-defects named above.
+Two stage folders, both building and serving from a clean container. The harness reports
+`claimed stage: 2`.
 
-We are reporting that rather than quietly shipping it, because a factory whose value is
-independent verification cannot also hide what its verification found.
+`stage-1/` ships **as the verifier rejected it**. Its fix round was cut off by a session
+limit, and re-dispatching a stage already dispatched would have made the run a rerun, so
+the folder stands with the three defects named above. We are reporting that rather than
+quietly shipping it, because a factory whose value is independent verification cannot also
+hide what its verification found.
+
+`stage-2/` is the folder that carries the product, and **all three defects are fixed
+there** — each one reproduced against `stage-1/` first and then verified fixed in the copy.
+That is the chain working as intended: a stage is not a rewrite, it is the previous stage
+carried forward and widened, and a defect found at stage 1 has to die at stage 2.
+
+What stage 2 did not get is the verifier's judgement. It acknowledged the work, had
+Playwright with Chromium plus Chrome and Edge standing by, and said it would judge only
+the final revision — which never arrived, because the run ended first. So the stage-2
+evidence in this repository is the coder's own, and by this factory's own standard that
+is a claim rather than a fact. The harness agrees with the claim; the verifier never got
+to.
 
 ## Pointing it at something else
 
