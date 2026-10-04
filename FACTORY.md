@@ -105,18 +105,21 @@ passed. That is the entire case for building a factory rather than an agent.
 
 ## Measured cost
 
-One room, two stages, two human messages — one dispatch per stage and nothing else.
+One room, four stages, four human messages — one dispatch per stage and nothing else.
 
 | | coordinator | coder | verifier |
 |---|---:|---:|---:|
-| Tool calls | 19 | 171 | 40 |
-| Room messages | 11 | 4 | 3 |
+| Tool calls | 35 | 261 | 42 |
+| Room messages | 26 | 7 | 5 |
 
 - **Wall clock:** 80 minutes for stage 1; stage 2 reached a complete committed milestone
   31 minutes after dispatch, 16 minutes before the session limit ended the run.
-- **Reached:** `claimed stage: 3` — one dispatch per stage, each stage the previous one
-  carried forward and widened, every folder building and serving from a clean container
+- **Reached:** `claimed stage: 4`, the highest there is. Each stage is the previous one
+  carried forward and widened, and every folder builds and serves from a clean container
   with outbound network blocked.
+- **Interruptions:** four of four stages ended on a model session limit rather than on a
+  decision. Every stage still produced a complete committed folder, because the task said
+  to commit a thin version of every surface before deepening any of them.
 - **Commits:** 3, all authored by `coder`, none amended or rebased.
 - **Supplied stage-1 checks:** 120 passed.
 - **Verifier's own probes:** ~300 assertions; 3 defects found.
@@ -169,27 +172,39 @@ the evidence exist before it is convenient.
 
 ## State at submission
 
-Three stage folders, each building and serving from a clean container. The harness
-reports `claimed stage: 3` — the API, the browser product, and then dated policies,
-availability explanations, reservation history and recurring series on top of it.
+Four stage folders, each building and serving from a clean container with outbound
+network blocked. The harness reports `claimed stage: 4`.
 
 `stage-1/` ships **as the verifier rejected it**. Its fix round was cut off by a session
 limit, and re-dispatching a stage already dispatched would have made the run a rerun, so
-the folder stands with the three defects named above. We are reporting that rather than
-quietly shipping it, because a factory whose value is independent verification cannot also
-hide what its verification found.
+the folder stands with the three defects named above. All three are fixed from `stage-2/`
+onward, each reproduced against `stage-1/` first and then verified fixed in the copy. That
+is the chain working as intended: a stage is not a rewrite, it is the previous stage
+carried forward, and a defect found at stage 1 has to die at stage 2.
 
-`stage-2/` is the folder that carries the product, and **all three defects are fixed
-there** — each one reproduced against `stage-1/` first and then verified fixed in the copy.
-That is the chain working as intended: a stage is not a rewrite, it is the previous stage
-carried forward and widened, and a defect found at stage 1 has to die at stage 2.
+### The honest limitation
 
-What stage 2 did not get is the verifier's judgement. It acknowledged the work, had
-Playwright with Chromium plus Chrome and Edge standing by, and said it would judge only
-the final revision — which never arrived, because the run ended first. So the stage-2
-evidence in this repository is the coder's own, and by this factory's own standard that
-is a claim rather than a fact. The harness agrees with the claim; the verifier never got
-to.
+**The verifier judged stage 1 and nothing after it.**
+
+It was not idle. At every stage it acknowledged the work, set out what it would establish,
+and then declined to judge the milestone it had been shown:
+
+> I won't judge 93dc26f. I'll wait for the final stage-4 SHA and all four spec texts.
+
+That is correct behaviour under its mandate — a milestone is not a revision offered for
+acceptance. But every stage ended on a session limit before the coder could declare a
+final revision, so the judgement never came. Stages 2 through 4 are the coder's own work,
+unreviewed. By this factory's own standard that makes their evidence a claim rather than a
+fact. The harness agrees with the claim. The verifier never got to.
+
+**What we would change.** The verifier's discipline is right when budget is unbounded and
+wrong when runs are killed from outside. A factory that expects interruption should have
+its judging seat review each committed milestone provisionally — recording what it has
+established so far and what remains — rather than holding its judgement for a final
+revision that may never be declared. We fixed this failure mode once already, for the
+collaboration record, after the first run lost everything by producing its evidence only
+at the end. We did not carry the same lesson across to the review itself, and three
+stages of independent verification were lost to the same mistake in a different place.
 
 ## Pointing it at something else
 

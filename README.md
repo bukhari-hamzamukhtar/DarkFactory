@@ -16,26 +16,27 @@ the room — the stage-1 task — and everything after it is the band.
 | `stage-1/` | The JSON API. Go, single container, complete and buildable on its own |
 | `stage-2/` | The API **plus the browser product** — search, booking, confirmation, lookup, combined tables |
 | `stage-3/` | Adds dated booking policies, availability explanations, reservation history and recurring series |
+| `stage-4/` | Adds seating repairs after a table closure, with preview and atomic apply, and amendments to recurring series |
 
 ## Running it
 
 ```sh
-cd stage-3
+cd stage-4
 docker build -t tablekeeper .
 docker run --rm --cpus 2 --memory 2g -e PORT=8080 -p 8080:8080 tablekeeper
 ```
 
 Then open `http://localhost:8080/` — search and availability grid, `/signup`, `/login`,
-`/lookup`. Full detail in [`stage-3/RUN.md`](stage-3/RUN.md); every stage folder runs the same way, and `stage-1/`
+`/lookup`. Full detail in [`stage-4/RUN.md`](stage-4/RUN.md); every stage folder runs the same way, and `stage-1/`
 and serves the API only, as its spec requires. The image is `scratch` with a static
 binary; the IANA time zone database is compiled in and the one dependency is vendored in
 the repository, so the build fetches no modules and the runtime needs no network.
 
 ## What the band produced
 
-Five commits, all authored by `coder`, none amended or rebased. Both stage folders build
+Six commits, all authored by `coder`, none amended or rebased. Both stage folders build
 and serve from a clean container with outbound network blocked, and the harness reports
-**claimed stage: 3**.
+**claimed stage: 4** — the highest there is.
 
 `stage-1/` is also the revision the `verifier` **rejected**. It independently derived about 300
 assertions from the specification and found three defects that no supplied check reaches
