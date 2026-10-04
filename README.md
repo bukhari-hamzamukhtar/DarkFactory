@@ -27,14 +27,14 @@ docker run --rm --cpus 2 --memory 2g -e PORT=8080 -p 8080:8080 tablekeeper
 ```
 
 Then open `http://localhost:8080/` — search and availability grid, `/signup`, `/login`,
-`/lookup`. Full detail in [`stage-4/RUN.md`](stage-4/RUN.md); every stage folder runs the same way, and `stage-1/`
-and serves the API only, as its spec requires. The image is `scratch` with a static
+`/lookup`. Full detail in [`stage-4/RUN.md`](stage-4/RUN.md). Every stage folder runs the same way;
+`stage-1/` serves the API only, as its spec requires. The image is `scratch` with a static
 binary; the IANA time zone database is compiled in and the one dependency is vendored in
 the repository, so the build fetches no modules and the runtime needs no network.
 
 ## What the band produced
 
-Six commits, all authored by `coder`, none amended or rebased. Both stage folders build
+Six commits, all authored by `coder`, none amended or rebased. All four stage folders build
 and serve from a clean container with outbound network blocked, and the harness reports
 **claimed stage: 4** — the highest there is.
 
@@ -44,8 +44,7 @@ assertions from the specification and found three defects that no supplied check
 comparison that uses wall-clock minutes across a daylight-saving change, and an unknown
 bearer token treated as a missing idempotency key rather than as unauthorised. The fix
 round in `stage-1/` was cut short by a model session limit, so that folder ships with the
-defects intact — **all of them are fixed in `stage-2/`**, which is the folder that carries
-the product.
+defects intact — **all of them are fixed from `stage-2/` onward**.
 
 Those findings, and why a factory finds them where a single agent does not, are the
 subject of [`FACTORY.md`](FACTORY.md).
